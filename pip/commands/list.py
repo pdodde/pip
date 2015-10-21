@@ -1,6 +1,10 @@
 from __future__ import absolute_import
 
+import csv
+from email.parser import FeedParser
 import logging
+import sys
+import StringIO
 import warnings
 
 from pip.basecommand import Command
@@ -69,6 +73,12 @@ class ListCommand(Command):
             help=("Include pre-release and development versions. By default, "
                   "pip only finds stable versions."),
         )
+        cmd_opts.add_option(
+            '--csv',
+            dest='csv',
+            action='store_true',
+            default=False,
+            help='Output csv formatted fields.')
 
         index_opts = make_option_group(index_group, self.parser)
 
@@ -190,7 +200,7 @@ class ListCommand(Command):
             local_only=options.local,
             user_only=options.user,
         )
-        self.output_package_listing(installed_packages)
+        self.output_package_listing(options, installed_packages)
 
     def run_editables(self, options):
         installed_packages = get_installed_distributions(
@@ -198,15 +208,31 @@ class ListCommand(Command):
             user_only=options.user,
             editables_only=True,
         )
-        self.output_package_listing(installed_packages)
+        self.output_package_listing(options, installed_packages)
 
-    def output_package_listing(self, installed_packages):
+    def output_package_listing(self, options, installed_packages):
         installed_packages = sorted(
             installed_packages,
             key=lambda dist: dist.project_name.lower(),
         )
+        if options.csv:
+            logger.info('project_name,version,license,summary,author,homepage')
         for dist in installed_packages:
-            if dist_is_editable(dist):
+            if options.csv:
+                line_io = StringIO.StringIO()
+                writer = csv.writer(line_io)
+                fields = [dist.project_name, dist.version, '', '', '', '']
+                if dist.has_metadata('PKG-INFO'):
+                    feed_parser = FeedParser()
+                    feed_parser.feed(dist.get_metadata('PKG-INFO'))
+                    pkg_info_dict = feed_parser.close()
+                    fields[2] = pkg_info_dict.get('License')
+                    fields[3] = pkg_info_dict.get('Summary')
+                    fields[4] = pkg_info_dict.get('Author')
+                    fields[5] = pkg_info_dict.get('Home-page')
+                writer.writerow(fields)
+                line = line_io.getvalue().strip()
+            elif dist_is_editable(dist):
                 line = '%s (%s, %s)' % (
                     dist.project_name,
                     dist.version,
@@ -214,11 +240,12 @@ class ListCommand(Command):
                 )
             else:
                 line = '%s (%s)' % (dist.project_name, dist.version)
-            logger.info(line)
+            if line:
+                logger.info(line)
 
     def run_uptodate(self, options):
         uptodate = []
         for dist, version, typ in self.find_packages_latest_versions(options):
             if dist.parsed_version == version:
                 uptodate.append(dist)
-        self.output_package_listing(uptodate)
+        self.output_package_listing(options, uptodate)
